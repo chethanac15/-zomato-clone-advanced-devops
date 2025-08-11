@@ -1,0 +1,474 @@
+pipeline {
+    agent any
+    
+    environment {
+        DOCKER_IMAGE = 'zomato-app'
+        DOCKER_TAG = "${env.BUILD_NUMBER}"
+        KUBECONFIG = '/var/jenkins_home/.kube/config'
+        SONAR_TOKEN = credentials('sonar-token')
+        DOCKER_REGISTRY = 'your-registry.com'
+        ARGOCD_SERVER = 'argocd-server:8080'
+        ARGOCD_TOKEN = credentials('argocd-token')
+        OPENKRUISE_NAMESPACE = 'openkruise-system'
+        PROJECT_NAMESPACE = 'zomato-project'
+    }
+    
+    options {
+        timestamps()
+        timeout(time: 2, unit: 'HOURS')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+    
+    triggers {
+        pollSCM('H/5 * * * *')
+        cron('0 2 * * *') // Daily build at 2 AM
+    }
+    
+    stages {
+        stage('Checkout & Setup') {
+            steps {
+                script {
+                    // Checkout code with credentials
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        userRemoteConfigs: [[
+                            url: 'https://github.com/your-org/zomato-clone.git',
+                            credentialsId: 'github-credentials'
+                        ]]
+                    ])
+                    
+                    // Set build description
+                    currentBuild.description = "Build #${env.BUILD_NUMBER} - Branch: ${env.BRANCH_NAME}"
+                    
+                    // Create workspace directories
+                    sh '''
+                        mkdir -p ${WORKSPACE}/artifacts
+                        mkdir -p ${WORKSPACE}/security-reports
+                        mkdir -p ${WORKSPACE}/test-results
+                        mkdir -p ${WORKSPACE}/performance-results
+                    '''
+                }
+            }
+        }
+        
+        stage('Code Quality Analysis') {
+            parallel {
+                stage('SonarQube Analysis') {
+                    steps {
+                        script {
+                            // Run SonarQube analysis
+                            withSonarQubeEnv('SonarQube') {
+                                sh '''
+                                    mvn clean verify sonar:sonar \
+                                        -Dsonar.projectKey=zomato-clone \
+                                        -Dsonar.sources=src \
+                                        -Dsonar.host.url=http://sonarqube:9000 \
+                                        -Dsonar.login=${SONAR_TOKEN}
+                                '''
+                            }
+                            
+                            // Wait for quality gate
+                            timeout(time: 10, unit: 'MINUTES') {
+                                def qg = waitForQualityGate()
+                                if (qg.status != 'OK') {
+                                    error "Quality Gate failed: ${qg.status}"
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                stage('Security Scanning') {
+                    steps {
+                        script {
+                            // Run Trivy vulnerability scan
+                            sh '''
+                                trivy image --format json --output ${WORKSPACE}/security-reports/trivy-report.json \
+                                    --severity HIGH,CRITICAL \
+                                    ${DOCKER_IMAGE}:${DOCKER_TAG}
+                            '''
+                            
+                            // Run Snyk dependency scan
+                            sh '''
+                                snyk test --json --output-file=${WORKSPACE}/security-reports/snyk-report.json
+                            '''
+                            
+                            // Run OWASP ZAP security scan
+                            sh '''
+                                docker run --rm -v ${WORKSPACE}:/zap/wrk/:rw \
+                                    -t owasp/zap2docker-stable zap-baseline.py \
+                                    -t http://zomato-app:3000 \
+                                    -J -j \
+                                    -r ${WORKSPACE}/security-reports/zap-report.json
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Dependency Analysis') {
+                    steps {
+                        script {
+                            // Check for outdated dependencies
+                            sh '''
+                                npm outdated --json > ${WORKSPACE}/security-reports/npm-outdated.json || true
+                                mvn versions:display-dependency-updates > ${WORKSPACE}/security-reports/maven-updates.txt || true
+                            '''
+                            
+                            // Check for known vulnerabilities
+                            sh '''
+                                npm audit --json > ${WORKSPACE}/security-reports/npm-audit.json || true
+                                mvn org.owasp:dependency-check-maven:check > ${WORKSPACE}/security-reports/maven-audit.txt || true
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Build & Test') {
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        script {
+                            // Run unit tests with coverage
+                            sh '''
+                                npm run test:unit -- --coverage --coverageReporters=json --coverageReporters=lcov
+                                npm run test:unit -- --coverage --coverageReporters=html
+                            '''
+                            
+                            // Publish test results
+                            publishTestResults(
+                                testResultsPattern: '**/test-results/*.xml',
+                                allowEmptyResults: true
+                            )
+                            
+                            // Publish coverage reports
+                            publishCoverage(
+                                adapters: [
+                                    lcovAdapter('coverage/lcov.info')
+                                ],
+                                sourceFileResolver: sourceFiles('NEVER_STORE')
+                            )
+                        }
+                    }
+                }
+                
+                stage('Integration Tests') {
+                    steps {
+                        script {
+                            // Start test environment
+                            sh '''
+                                docker-compose -f docker-compose.test.yml up -d
+                                sleep 30
+                            '''
+                            
+                            // Run integration tests
+                            sh '''
+                                npm run test:integration
+                            '''
+                            
+                            // Stop test environment
+                            sh '''
+                                docker-compose -f docker-compose.test.yml down
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Performance Tests') {
+                    steps {
+                        script {
+                            // Run K6 performance tests
+                            sh '''
+                                k6 run --out json=${WORKSPACE}/performance-results/k6-results.json \
+                                    --out influxdb=http://influxdb:8086/k6 \
+                                    tests/performance/load-test.js
+                            '''
+                            
+                            // Run JMeter tests
+                            sh '''
+                                jmeter -n -t tests/performance/performance-test.jmx \
+                                    -l ${WORKSPACE}/performance-results/jmeter-results.jtl \
+                                    -e -o ${WORKSPACE}/performance-results/jmeter-report
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    // Build multi-stage Docker image
+                    sh '''
+                        docker build \
+                            --build-arg BUILD_NUMBER=${BUILD_NUMBER} \
+                            --build-arg GIT_COMMIT=${GIT_COMMIT} \
+                            --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+                            -t ${DOCKER_IMAGE}:${DOCKER_TAG} \
+                            -t ${DOCKER_IMAGE}:latest \
+                            .
+                    '''
+                    
+                    // Run security scan on built image
+                    sh '''
+                        trivy image --severity HIGH,CRITICAL \
+                            --exit-code 1 \
+                            ${DOCKER_IMAGE}:${DOCKER_TAG}
+                    '''
+                    
+                    // Sign image with Docker Content Trust
+                    sh '''
+                        docker trust sign ${DOCKER_IMAGE}:${DOCKER_TAG}
+                    '''
+                }
+            }
+        }
+        
+        stage('Push to Registry') {
+            steps {
+                script {
+                    // Tag and push to registry
+                    sh '''
+                        docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                        docker tag ${DOCKER_IMAGE}:latest ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
+                        docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                        docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
+                    '''
+                }
+            }
+        }
+        
+        stage('Deploy to Staging') {
+            steps {
+                script {
+                    // Update Kubernetes manifests with new image
+                    sh '''
+                        sed -i 's|IMAGE_TAG|${DOCKER_TAG}|g' k8s/applications/zomato-advanced-deployment.yaml
+                        sed -i 's|REGISTRY_URL|${DOCKER_REGISTRY}|g' k8s/applications/zomato-advanced-deployment.yaml
+                    '''
+                    
+                    // Deploy to staging using kubectl
+                    sh '''
+                        kubectl apply -f k8s/namespace.yaml
+                        kubectl apply -f k8s/openkruise/installation.yaml
+                        kubectl apply -f k8s/applications/zomato-advanced-deployment.yaml
+                    '''
+                    
+                    // Wait for deployment to be ready
+                    sh '''
+                        kubectl rollout status deployment/zomato-app -n ${PROJECT_NAMESPACE} --timeout=300s
+                    '''
+                    
+                    // Run smoke tests
+                    sh '''
+                        npm run test:smoke -- --base-url=http://staging.zomato-app.com
+                    '''
+                }
+            }
+        }
+        
+        stage('OpenKruise Validation') {
+            steps {
+                script {
+                    // Verify OpenKruise resources
+                    sh '''
+                        kubectl get sidecarsets -n ${PROJECT_NAMESPACE}
+                        kubectl get workloadspreads -n ${PROJECT_NAMESPACE}
+                        kubectl get podunavailablebudgets -n ${PROJECT_NAMESPACE}
+                    '''
+                    
+                    // Test OpenKruise features
+                    sh '''
+                        # Test SidecarSet injection
+                        kubectl get pods -n ${PROJECT_NAMESPACE} -l app=zomato-app -o jsonpath='{.items[*].spec.containers[*].name}' | grep istio-proxy
+                        
+                        # Test WorkloadSpread distribution
+                        kubectl get pods -n ${PROJECT_NAMESPACE} -l app=zomato-app -o wide
+                    '''
+                }
+            }
+        }
+        
+        stage('ArgoCD Sync') {
+            steps {
+                script {
+                    // Sync ArgoCD application
+                    sh '''
+                        argocd app sync zomato-clone \
+                            --server ${ARGOCD_SERVER} \
+                            --auth-token ${ARGOCD_TOKEN} \
+                            --force
+                    '''
+                    
+                    // Wait for sync to complete
+                    sh '''
+                        argocd app wait zomato-clone \
+                            --server ${ARGOCD_SERVER} \
+                            --auth-token ${ARGOCD_TOKEN} \
+                            --health
+                    '''
+                }
+            }
+        }
+        
+        stage('Post-Deployment Tests') {
+            parallel {
+                stage('Health Checks') {
+                    steps {
+                        script {
+                            // Run comprehensive health checks
+                            sh '''
+                                kubectl get pods -n ${PROJECT_NAMESPACE}
+                                kubectl get services -n ${PROJECT_NAMESPACE}
+                                kubectl get ingress -n ${PROJECT_NAMESPACE}
+                            '''
+                            
+                            // Test application endpoints
+                            sh '''
+                                curl -f http://zomato-app:3000/health
+                                curl -f http://zomato-app:3000/ready
+                                curl -f http://zomato-app:3000/metrics
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Performance Validation') {
+                    steps {
+                        script {
+                            // Run post-deployment performance tests
+                            sh '''
+                                k6 run --out json=${WORKSPACE}/performance-results/post-deploy-k6.json \
+                                    tests/performance/post-deploy-test.js
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Security Validation') {
+                    steps {
+                        script {
+                            // Run post-deployment security scans
+                            sh '''
+                                trivy image --severity HIGH,CRITICAL \
+                                    --exit-code 1 \
+                                    ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Monitoring & Alerting') {
+            steps {
+                script {
+                    // Verify monitoring setup
+                    sh '''
+                        kubectl get pods -n monitoring
+                        curl -f http://prometheus:9090/-/healthy
+                        curl -f http://grafana:3000/api/health
+                    '''
+                    
+                    // Check alerting rules
+                    sh '''
+                        kubectl get prometheusrules -n monitoring
+                        kubectl get alertmanagerconfigs -n monitoring
+                    '''
+                }
+            }
+        }
+        
+        stage('Documentation & Reports') {
+            steps {
+                script {
+                    // Generate deployment report
+                    sh '''
+                        echo "Deployment Report for Build ${BUILD_NUMBER}" > ${WORKSPACE}/artifacts/deployment-report.txt
+                        echo "Date: $(date)" >> ${WORKSPACE}/artifacts/deployment-report.txt
+                        echo "Image: ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}" >> ${WORKSPACE}/artifacts/deployment-report.txt
+                        echo "Commit: ${GIT_COMMIT}" >> ${WORKSPACE}/artifacts/deployment-report.txt
+                        kubectl get pods -n ${PROJECT_NAMESPACE} >> ${WORKSPACE}/artifacts/deployment-report.txt
+                    '''
+                    
+                    // Archive artifacts
+                    archiveArtifacts(
+                        artifacts: 'artifacts/**/*,security-reports/**/*,test-results/**/*,performance-results/**/*',
+                        allowEmptyArchive: true
+                    )
+                    
+                    // Publish test results
+                    publishTestResults(
+                        testResultsPattern: '**/test-results/*.xml',
+                        allowEmptyResults: true
+                    )
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Cleanup workspace
+                cleanWs()
+                
+                // Send notifications
+                if (currentBuild.result == 'SUCCESS') {
+                    emailext (
+                        subject: "Build Successful: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                        body: "Build ${env.BUILD_NUMBER} completed successfully.\n\nView: ${env.BUILD_URL}",
+                        to: "${env.BUILD_USER_EMAIL}"
+                    )
+                } else if (currentBuild.result == 'FAILURE') {
+                    emailext (
+                        subject: "Build Failed: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                        body: "Build ${env.BUILD_NUMBER} failed.\n\nView: ${env.BUILD_URL}",
+                        to: "${env.BUILD_USER_EMAIL}"
+                    )
+                }
+            }
+        }
+        
+        success {
+            script {
+                // Update deployment status
+                currentBuild.description += " - Status: Deployed Successfully"
+                
+                // Tag successful build
+                sh '''
+                    git tag -a "v${BUILD_NUMBER}" -m "Build ${BUILD_NUMBER} - ${GIT_COMMIT}"
+                    git push origin "v${BUILD_NUMBER}"
+                '''
+            }
+        }
+        
+        failure {
+            script {
+                // Rollback deployment on failure
+                sh '''
+                    kubectl rollout undo deployment/zomato-app -n ${PROJECT_NAMESPACE}
+                    kubectl rollout status deployment/zomato-app -n ${PROJECT_NAMESPACE} --timeout=300s
+                '''
+                
+                // Update build description
+                currentBuild.description += " - Status: Failed - Rolled Back"
+            }
+        }
+        
+        cleanup {
+            script {
+                // Cleanup Docker images
+                sh '''
+                    docker rmi ${DOCKER_IMAGE}:${DOCKER_TAG} || true
+                    docker rmi ${DOCKER_IMAGE}:latest || true
+                    docker system prune -f
+                '''
+            }
+        }
+    }
+}

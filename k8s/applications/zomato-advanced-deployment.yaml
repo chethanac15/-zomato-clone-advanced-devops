@@ -1,0 +1,373 @@
+# Advanced Zomato Application Deployment using OpenKruise
+# This demonstrates advanced Kubernetes application automation capabilities
+
+---
+# OpenKruise Advanced StatefulSet for Database
+apiVersion: apps.kruise.io/v1beta1
+kind: StatefulSet
+metadata:
+  name: zomato-postgres
+  namespace: zomato-project
+  labels:
+    app: zomato-postgres
+    project: zomato-clone
+    component: database
+spec:
+  serviceName: zomato-postgres-service
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: zomato-postgres
+  template:
+    metadata:
+      labels:
+        app: zomato-postgres
+        component: database
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_DB
+          value: "zomato"
+        - name: POSTGRES_USER
+          value: "zomato_user"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: zomato-db-secret
+              key: password
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        - name: postgres-config
+          mountPath: /etc/postgresql/postgresql.conf
+          subPath: postgresql.conf
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - zomato_user
+            - -d
+            - zomato
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - zomato_user
+            - -d
+            - zomato
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: postgres-config
+        configMap:
+          name: postgres-config
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: "fast-ssd"
+      resources:
+        requests:
+          storage: 10Gi
+---
+# OpenKruise SidecarSet for consistent sidecar injection
+apiVersion: apps.kruise.io/v1alpha1
+kind: SidecarSet
+metadata:
+  name: zomato-sidecars
+  namespace: zomato-project
+  labels:
+    project: zomato-clone
+spec:
+  selector:
+    matchLabels:
+      app: zomato-app
+  containers:
+  - name: istio-proxy
+    image: istio/proxyv2:1.20.0
+    ports:
+    - containerPort: 15090
+      name: http-envoy-prom
+    - containerPort: 15020
+      name: http2-prom
+    - containerPort: 15021
+      name: http2-probe
+    env:
+    - name: ISTIO_META_WORKLOAD_NAME
+      value: zomato-app
+    - name: ISTIO_META_OWNER
+      value: kubernetes://apis/apps/v1/namespaces/zomato-project/deployments/zomato-app
+    - name: ISTIO_META_MESH_ID
+      value: mesh
+    - name: ISTIO_META_CLUSTER_ID
+      value: Kubernetes
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+  - name: fluentd-sidecar
+    image: fluent/fluentd:v1.16-1
+    ports:
+    - containerPort: 24224
+      name: fluentd
+    volumeMounts:
+    - name: fluentd-config
+      mountPath: /fluentd/etc
+    - name: app-logs
+      mountPath: /app/logs
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+  volumes:
+  - name: fluentd-config
+    configMap:
+      name: fluentd-sidecar-config
+  - name: app-logs
+    emptyDir: {}
+---
+# OpenKruise WorkloadSpread for multi-zone deployment
+apiVersion: apps.kruise.io/v1alpha1
+kind: WorkloadSpread
+metadata:
+  name: zomato-workload-spread
+  namespace: zomato-project
+  labels:
+    project: zomato-clone
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: zomato-app
+  subsets:
+  - name: zone-a
+    requiredNodeSelectorTerms:
+    - matchExpressions:
+      - key: topology.kubernetes.io/zone
+        operator: In
+        values:
+        - us-west-2a
+    maxReplicas: 3
+    patch:
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              topology.kubernetes.io/zone: us-west-2a
+  - name: zone-b
+    requiredNodeSelectorTerms:
+    - matchExpressions:
+      - key: topology.kubernetes.io/zone
+        operator: In
+        values:
+        - us-west-2b
+    maxReplicas: 2
+    patch:
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              topology.kubernetes.io/zone: us-west-2b
+---
+# OpenKruise PodUnavailableBudget for zero-downtime updates
+apiVersion: apps.kruise.io/v1beta1
+kind: PodUnavailableBudget
+metadata:
+  name: zomato-pub
+  namespace: zomato-project
+  labels:
+    project: zomato-clone
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: zomato-app
+  maxUnavailable: 1
+  minAvailable: 2
+---
+# Main Zomato Application Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zomato-app
+  namespace: zomato-project
+  labels:
+    app: zomato-app
+    project: zomato-clone
+    component: frontend
+spec:
+  replicas: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: zomato-app
+  template:
+    metadata:
+      labels:
+        app: zomato-app
+        component: frontend
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: zomato-app
+        image: zomato-app:latest
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 3001
+          name: metrics
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: zomato-db-secret
+              key: url
+        - name: REDIS_URL
+          value: "redis://zomato-redis:6379"
+        - name: JAEGER_AGENT_HOST
+          value: "jaeger-agent"
+        - name: JAEGER_AGENT_PORT
+          value: "6831"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: app-config
+          mountPath: /app/config
+        - name: app-logs
+          mountPath: /app/logs
+      volumes:
+      - name: app-config
+        configMap:
+          name: zomato-app-config
+      - name: app-logs
+        emptyDir: {}
+---
+# Redis Deployment with OpenKruise features
+apiVersion: apps.kruise.io/v1beta1
+kind: StatefulSet
+metadata:
+  name: zomato-redis
+  namespace: zomato-project
+  labels:
+    app: zomato-redis
+    project: zomato-clone
+    component: cache
+spec:
+  serviceName: zomato-redis-service
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: zomato-redis
+  template:
+    metadata:
+      labels:
+        app: zomato-redis
+        component: cache
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+          name: redis
+        command:
+        - redis-server
+        - /etc/redis/redis.conf
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+        - name: redis-config
+          mountPath: /etc/redis
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+        livenessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: redis-config
+        configMap:
+          name: redis-config
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: "fast-ssd"
+      resources:
+        requests:
+          storage: 5Gi

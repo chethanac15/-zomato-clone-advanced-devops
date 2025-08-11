@@ -1,0 +1,404 @@
+apiVersion: config.gatekeeper.sh/v1alpha1
+kind: Config
+metadata:
+  name: config
+  namespace: gatekeeper-system
+spec:
+  sync:
+    syncOnly:
+      - group: ""
+        version: "v1"
+        kind: "Pod"
+      - group: ""
+        version: "v1"
+        kind: "Deployment"
+      - group: ""
+        version: "v1"
+        kind: "Service"
+      - group: "apps"
+        version: "v1"
+        kind: "Deployment"
+      - group: "apps"
+        version: "v1"
+        kind: "StatefulSet"
+      - group: "networking.k8s.io"
+        version: "v1"
+        kind: "NetworkPolicy"
+      - group: "rbac.authorization.k8s.io"
+        version: "v1"
+        kind: "Role"
+      - group: "rbac.authorization.k8s.io"
+        version: "v1"
+        kind: "RoleBinding"
+      - group: "rbac.authorization.k8s.io"
+        version: "v1"
+        kind: "ClusterRole"
+      - group: "rbac.authorization.k8s.io"
+        version: "v1"
+        kind: "ClusterRoleBinding"
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: podsecuritypolicies
+spec:
+  crd:
+    spec:
+      names:
+        kind: PodSecurityPolicies
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package podsecuritypolicies
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          not input.review.object.spec.securityContext.runAsNonRoot
+        
+          msg := "Pods must not run as root"
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          not input.review.object.spec.securityContext.readOnlyRootFilesystem
+        
+          msg := "Pods must have read-only root filesystem"
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          not input.review.object.spec.securityContext.allowPrivilegeEscalation == false
+        
+          msg := "Pods must not allow privilege escalation"
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          input.review.object.spec.securityContext.privileged == true
+        
+          msg := "Pods must not run in privileged mode"
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          not input.review.object.spec.securityContext.runAsUser
+        
+          msg := "Pods must specify runAsUser"
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          not input.review.object.spec.securityContext.runAsGroup
+        
+          msg := "Pods must specify runAsGroup"
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          not input.review.object.spec.securityContext.fsGroup
+        
+          msg := "Pods must specify fsGroup"
+        }
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: networkpolicies
+spec:
+  crd:
+    spec:
+      names:
+        kind: NetworkPolicies
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package networkpolicies
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          not has_network_policy(input.review.object.metadata.namespace)
+        
+          msg := sprintf("Namespace %v must have a NetworkPolicy", [input.review.object.metadata.namespace])
+        }
+        
+        has_network_policy(namespace) {
+          data.inventory.networking.k8s.io.v1.NetworkPolicy[namespace]
+        }
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: resourcequota
+spec:
+  crd:
+    spec:
+      names:
+        kind: ResourceQuota
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package resourcequota
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          not has_resource_quota(input.review.object.metadata.namespace)
+        
+          msg := sprintf("Namespace %v must have a ResourceQuota", [input.review.object.metadata.namespace])
+        }
+        
+        has_resource_quota(namespace) {
+          data.inventory.v1.ResourceQuota[namespace]
+        }
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: imagetags
+spec:
+  crd:
+    spec:
+      names:
+        kind: ImageTags
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package imagetags
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          not valid_image_tag(container.image)
+        
+          msg := sprintf("Container %v must use a valid image tag, not 'latest'", [container.name])
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          container := input.review.object.spec.initContainers[_]
+          not valid_image_tag(container.image)
+        
+          msg := sprintf("Init container %v must use a valid image tag, not 'latest'", [container.name])
+        }
+        
+        valid_image_tag(image) {
+          not endswith(image, ":latest")
+          not endswith(image, ":main")
+          not endswith(image, ":master")
+        }
+        
+        endswith(str, suffix) {
+          count(str) >= count(suffix)
+          substr(str, count(str) - count(suffix)) == suffix
+        }
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: labels
+spec:
+  crd:
+    spec:
+      names:
+        kind: Labels
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package labels
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          not has_required_labels(input.review.object.metadata.labels)
+        
+          msg := "Pods must have required labels: app, version, environment"
+        }
+        
+        has_required_labels(labels) {
+          labels.app
+          labels.version
+          labels.environment
+        }
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: limits
+spec:
+  crd:
+    spec:
+      names:
+        kind: Limits
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package limits
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          not has_resource_limits(container)
+        
+          msg := sprintf("Container %v must have resource limits", [container.name])
+        }
+        
+        has_resource_limits(container) {
+          container.resources.limits
+          container.resources.limits.cpu
+          container.resources.limits.memory
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          not has_resource_requests(container)
+        
+          msg := sprintf("Container %v must have resource requests", [container.name])
+        }
+        
+        has_resource_requests(container) {
+          container.resources.requests
+          container.resources.requests.cpu
+          container.resources.requests.memory
+        }
+---
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: probes
+spec:
+  crd:
+    spec:
+      names:
+        kind: Probes
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package probes
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          not has_liveness_probe(container)
+        
+          msg := sprintf("Container %v must have a liveness probe", [container.name])
+        }
+        
+        violation[{"msg": msg}] {
+          input.review.object.kind == "Pod"
+          container := input.review.object.spec.containers[_]
+          not has_readiness_probe(container)
+        
+          msg := sprintf("Container %v must have a readiness probe", [container.name])
+        }
+        
+        has_liveness_probe(container) {
+          container.livenessProbe
+        }
+        
+        has_readiness_probe(container) {
+          container.readinessProbe
+        }
+---
+# Pod Security Policies Constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: PodSecurityPolicies
+metadata:
+  name: pod-security-policies
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - "zomato-project"
+      - "monitoring"
+      - "security"
+---
+# Network Policies Constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: NetworkPolicies
+metadata:
+  name: network-policies
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - "zomato-project"
+      - "monitoring"
+      - "security"
+---
+# Resource Quota Constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: ResourceQuota
+metadata:
+  name: resource-quota
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - "zomato-project"
+      - "monitoring"
+      - "security"
+---
+# Image Tags Constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: ImageTags
+metadata:
+  name: image-tags
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - "zomato-project"
+      - "monitoring"
+      - "security"
+---
+# Labels Constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: Labels
+metadata:
+  name: labels
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - "zomato-project"
+      - "monitoring"
+      - "security"
+---
+# Limits Constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: Limits
+metadata:
+  name: limits
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - "zomato-project"
+      - "monitoring"
+      - "security"
+---
+# Probes Constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: Probes
+metadata:
+  name: probes
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - "zomato-project"
+      - "monitoring"
+      - "security"

@@ -1,0 +1,526 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: zomato-pod-failure
+  namespace: chaos-testing
+spec:
+  action: pod-failure
+  mode: one
+  value: ""
+  duration: "30s"
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 5m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: zomato-network-delay
+  namespace: chaos-testing
+spec:
+  action: delay
+  mode: one
+  value: ""
+  duration: "1m"
+  delay:
+    latency: "100ms"
+    correlation: "100"
+    jitter: "0ms"
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  direction: to
+  target:
+    mode: one
+    selector:
+      namespaces:
+        - zomato-project
+      labelSelectors:
+        app: postgres
+  scheduler:
+    cron: "@every 10m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: zomato-network-loss
+  namespace: chaos-testing
+spec:
+  action: loss
+  mode: one
+  value: ""
+  duration: "2m"
+  loss:
+    loss: "25"
+    correlation: "100"
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  direction: to
+  target:
+    mode: one
+    selector:
+      namespaces:
+        - zomato-project
+      labelSelectors:
+        app: redis
+  scheduler:
+    cron: "@every 15m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: zomato-network-partition
+  namespace: chaos-testing
+spec:
+  action: partition
+  mode: one
+  value: ""
+  duration: "1m"
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  direction: to
+  target:
+    mode: one
+    selector:
+      namespaces:
+        - zomato-project
+      labelSelectors:
+        app: postgres
+  scheduler:
+    cron: "@every 20m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: zomato-cpu-stress
+  namespace: chaos-testing
+spec:
+  mode: one
+  value: ""
+  duration: "2m"
+  stressors:
+    cpu:
+      workers: 2
+      load: 80
+      options: ["cpu-list", "0-1"]
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 25m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: zomato-memory-stress
+  namespace: chaos-testing
+spec:
+  mode: one
+  value: ""
+  duration: "2m"
+  stressors:
+    memory:
+      workers: 2
+      size: "256MB"
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 30m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: zomato-pod-kill
+  namespace: chaos-testing
+spec:
+  action: pod-kill
+  mode: one
+  value: ""
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 35m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: zomato-container-kill
+  namespace: chaos-testing
+spec:
+  action: container-kill
+  mode: one
+  value: ""
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 40m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: TimeChaos
+metadata:
+  name: zomato-time-skew
+  namespace: chaos-testing
+spec:
+  mode: one
+  value: ""
+  duration: "1m"
+  timeOffset: "1h"
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 45m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: IOChaos
+metadata:
+  name: zomato-io-fault
+  namespace: chaos-testing
+spec:
+  action: latency
+  mode: one
+  value: ""
+  duration: "2m"
+  delay: "100ms"
+  percent: 50
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  volumeMounts:
+    - name: data
+      mountPath: /data
+  scheduler:
+    cron: "@every 50m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: DNSChaos
+metadata:
+  name: zomato-dns-error
+  namespace: chaos-testing
+spec:
+  action: error
+  mode: one
+  value: ""
+  duration: "1m"
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 55m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: HTTPChaos
+metadata:
+  name: zomato-http-delay
+  namespace: chaos-testing
+spec:
+  mode: one
+  value: ""
+  duration: "2m"
+  port: 3000
+  target: pod
+  delay: "2s"
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 1h"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: HTTPChaos
+metadata:
+  name: zomato-http-abort
+  namespace: chaos-testing
+spec:
+  mode: one
+  value: ""
+  duration: "1m"
+  port: 3000
+  target: pod
+  abort: true
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 1h5m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: KernelChaos
+metadata:
+  name: zomato-kernel-fault
+  namespace: chaos-testing
+spec:
+  mode: one
+  value: ""
+  duration: "1m"
+  failKernRequest:
+    callchain:
+      - funcname: "dev_hard_start_xmit"
+    failtype: 0
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 1h10m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: AWSChaos
+metadata:
+  name: zomato-ec2-stop
+  namespace: chaos-testing
+spec:
+  action: ec2-stop
+  mode: one
+  value: ""
+  duration: "5m"
+  awsRegion: "us-west-2"
+  ec2Instance: "i-1234567890abcdef0"
+  secretName: "aws-secret"
+  scheduler:
+    cron: "@every 2h"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: GCPChaos
+metadata:
+  name: zomato-gcp-vm-stop
+  namespace: chaos-testing
+spec:
+  action: vm-stop
+  mode: one
+  value: ""
+  duration: "5m"
+  project: "zomato-project"
+  zone: "us-central1-a"
+  instance: "zomato-instance"
+  secretName: "gcp-secret"
+  scheduler:
+    cron: "@every 2h30m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: AzureChaos
+metadata:
+  name: zomato-azure-vm-stop
+  namespace: chaos-testing
+spec:
+  action: vm-stop
+  mode: one
+  value: ""
+  duration: "5m"
+  subscriptionID: "subscription-id"
+  resourceGroup: "zomato-rg"
+  vmName: "zomato-vm"
+  secretName: "azure-secret"
+  scheduler:
+    cron: "@every 3h"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: JVMChaos
+metadata:
+  name: zomato-jvm-exception
+  namespace: chaos-testing
+spec:
+  mode: one
+  value: ""
+  duration: "1m"
+  action: exception
+  target: jvm
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  exception:
+    exception: "java.lang.RuntimeException"
+    message: "Chaos testing exception"
+  scheduler:
+    cron: "@every 3h30m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: JVMChaos
+metadata:
+  name: zomato-jvm-gc
+  namespace: chaos-testing
+spec:
+  mode: one
+  value: ""
+  duration: "2m"
+  action: gc
+  target: jvm
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  scheduler:
+    cron: "@every 4h"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: JVMChaos
+metadata:
+  name: zomato-jvm-rule-data
+  namespace: chaos-testing
+spec:
+  mode: one
+  value: ""
+  duration: "1m"
+  action: ruleData
+  target: jvm
+  selector:
+    namespaces:
+      - zomato-project
+    labelSelectors:
+      app: zomato-app
+  ruleData:
+    ruleData: "RULE modify\nCLASS java.lang.String\nMETHOD toString\nAT ENTRY\nIF true\nDO\n  throw new java.lang.RuntimeException(\"Chaos testing\")\nENDRULE"
+  scheduler:
+    cron: "@every 4h30m"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PhysicalMachineChaos
+metadata:
+  name: zomato-pm-stress
+  namespace: chaos-testing
+spec:
+  action: stress-cpu
+  mode: one
+  value: ""
+  duration: "2m"
+  stressChaos:
+    stressors:
+      cpu:
+        workers: 4
+        load: 90
+  selector:
+    address: ["192.168.1.100"]
+  scheduler:
+    cron: "@every 5h"
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: zomato-chaos-workflow
+  namespace: chaos-testing
+spec:
+  entry: the-entry
+  templates:
+    - name: the-entry
+      templateType: Serial
+      children:
+        - pod-failure
+        - network-delay
+        - cpu-stress
+        - memory-stress
+        - pod-kill
+    - name: pod-failure
+      templateType: PodChaos
+      podChaos:
+        action: pod-failure
+        mode: one
+        value: ""
+        duration: "30s"
+        selector:
+          namespaces:
+            - zomato-project
+          labelSelectors:
+            app: zomato-app
+    - name: network-delay
+      templateType: NetworkChaos
+      networkChaos:
+        action: delay
+        mode: one
+        value: ""
+        duration: "1m"
+        delay:
+          latency: "100ms"
+          correlation: "100"
+          jitter: "0ms"
+        selector:
+          namespaces:
+            - zomato-project
+          labelSelectors:
+            app: zomato-app
+        direction: to
+        target:
+          mode: one
+          selector:
+            namespaces:
+              - zomato-project
+            labelSelectors:
+              app: postgres
+    - name: cpu-stress
+      templateType: StressChaos
+      stressChaos:
+        mode: one
+        value: ""
+        duration: "2m"
+        stressors:
+          cpu:
+            workers: 2
+            load: 80
+            options: ["cpu-list", "0-1"]
+        selector:
+          namespaces:
+            - zomato-project
+          labelSelectors:
+            app: zomato-app
+    - name: memory-stress
+      templateType: StressChaos
+      stressChaos:
+        mode: one
+        value: ""
+        duration: "2m"
+        stressors:
+          memory:
+            workers: 2
+            size: "256MB"
+        selector:
+          namespaces:
+            - zomato-project
+          labelSelectors:
+            app: zomato-app
+    - name: pod-kill
+      templateType: PodChaos
+      podChaos:
+        action: pod-kill
+        mode: one
+        value: ""
+        selector:
+          namespaces:
+            - zomato-project
+          labelSelectors:
+            app: zomato-app
