@@ -1,0 +1,39 @@
+{
+  "tags": {
+    "allowUnknownTags": true,
+    "dictionaries": ["jsdoc", "closure"]
+  },
+  "source": {
+    "include": ["src"],
+    "includePattern": "\\.js$",
+    "excludePattern": "(node_modules/|docs|coverage|dist|build)"
+  },
+  "plugins": [
+    "plugins/markdown"
+  ],
+  "templates": {
+    "cleverLinks": false,
+    "monospaceLinks": false,
+    "default": {
+      "outputSourceFiles": true,
+      "includeDate": true
+    }
+  },
+  "opts": {
+    "destination": "./docs",
+    "recurse": true,
+    "readme": "./README.md",
+    "template": "node_modules/docdash",
+    "theme_opts": {
+      "title": "Zomato Clone API Documentation",
+      "menu": {
+        "Github repo": {
+          "href": "https://github.com/yourusername/zomato-clone-advanced",
+          "target": "_blank",
+          "class": "menu-item",
+          "id": "repository"
+        }
+      }
+    }
+  }
+}
