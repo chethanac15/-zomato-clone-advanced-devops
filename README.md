@@ -1,9 +1,5 @@
 # 🚀 ZOMATO Clone with OpenKruise Integration
 
-## 🌟 **Enhanced Features for OpenKruise Maintainers**
-
-This project demonstrates advanced cloud-native DevOps practices with **OpenKruise integration**, showcasing skills that directly align with Kubernetes application automation and management.
-
 ## 🛠️ **Advanced Tech Stack**
 
 ### **Core Technologies**
@@ -187,4 +183,3 @@ MIT License - see LICENSE file for details
 
 ---
 
-**Built with ❤️ for the OpenKruise community**
