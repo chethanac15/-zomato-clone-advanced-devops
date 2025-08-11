@@ -1,4 +1,4 @@
-# 🚀 Advanced DevOps Project: ZOMATO Clone with OpenKruise Integration
+# 🚀 ZOMATO Clone with OpenKruise Integration
 
 ## 🌟 **Enhanced Features for OpenKruise Maintainers**
 
@@ -180,14 +180,6 @@ kubectl apply -f k8s/
 - [Istio Documentation](https://istio.io/)
 - [ArgoCD Documentation](https://argo-cd.readthedocs.io/)
 - [Prometheus Documentation](https://prometheus.io/)
-
-## 📝 **Contributing**
-
-This project demonstrates advanced DevOps practices suitable for:
-- **LFX Mentorship Applications**
-- **OpenKruise Contributions**
-- **Cloud-Native Development**
-- **DevOps Engineering**
 
 ## 📄 **License**
 
